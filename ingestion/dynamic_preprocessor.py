@@ -29,7 +29,8 @@ from dotenv import load_dotenv
 from pymongo import MongoClient, UpdateOne
 from pymongo.errors import BulkWriteError
 
-from ingestion.cleaner import normalize_whitespace, validate_doc, generate_id
+from ingestion.cleaner import normalize_whitespace, validate_doc, generate_id, apply_symbol_legend
+from ingestion.regions import REGION_MAP
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -61,6 +62,7 @@ def build_lookup_maps(raw_data: dict) -> tuple[dict, dict, dict]:
       - vervar_map  : {val_str → label}  (dimensi vertikal, misal jenis kelamin/wilayah)
       - turvar_map  : {val_str → label}  (kategori/indikator turunan)
       - tahun_map   : {val_str → label}  (tahun data)
+      - turtahun_map : {val_str → label}  (tahun untuk turvar, jika ada)
 
     Key di datacontent adalah gabungan string dari val-val tersebut,
     sehingga lookup map ini kunci utama proses decode.
@@ -79,19 +81,17 @@ def build_lookup_maps(raw_data: dict) -> tuple[dict, dict, dict]:
     }
     tahun_map = {
         str(item["val"]): item["label"]
+        for item in data_section.get("tahun", [])
+        if item.get("val") is not None
+    }
+    turtahun_map = {
+        str(item["val"]): item["label"]
         for item in data_section.get("turtahun", [])
         if item.get("val") is not None
     }
+    
 
-    # Fallback: ambil tahun dari field `tahun` jika `turtahun` kosong
-    if not tahun_map:
-        tahun_map = {
-            str(item["val"]): item["label"]
-            for item in data_section.get("tahun", [])
-            if item.get("val") is not None
-        }
-
-    return vervar_map, turvar_map, tahun_map
+    return vervar_map, turvar_map, tahun_map, turtahun_map
 
 
 def decode_datacontent_key(
@@ -100,62 +100,67 @@ def decode_datacontent_key(
     vervar_map: dict,
     turvar_map: dict,
     tahun_map: dict,
-) -> tuple[str, str, str] | None:
+    turtahun_map: dict,
+) -> tuple[str, str, str, str] | None:
     """
-    Decode satu key datacontent numerik menjadi tuple (vervar_label, turvar_label, tahun_label).
+    Decode key datacontent secara berurutan dari kiri:
+      Format: {vervar_val}{var_id}{turvar_val}{tahun_val}{turtahun_val}
 
-    Format key: {vervar_val}{var_id}{turvar_val}{tahun_val}
-    Semua komponen disambung tanpa separator — parsing dengan eliminasi var_id.
-
-    Contoh:
-      key     = "11331151210"
-      var_id  = 133
-      → sisa setelah hapus "133" = "1" + "115" + "121" + "0"
-      → vervar_val="1", turvar_val="115", tahun_val="121", turtahun_val="0"
-
-    Return None jika decode gagal (key tidak bisa diparsing).
+    Strategi: greedy match dari kiri untuk setiap komponen.
+    Return tuple (vervar_label, turvar_label, tahun_label, turtahun_label)
+    atau None jika decode gagal.
     """
+    remaining = key
     var_id_str = str(var_id)
 
-    # Cari posisi var_id dalam key
-    idx = key.find(var_id_str)
-    if idx == -1:
-        logger.debug(f"var_id '{var_id_str}' tidak ditemukan dalam key '{key}'")
-        return None
-
-    # Bagian sebelum var_id = vervar_val
-    vervar_val = key[:idx]
-
-    # Bagian setelah var_id = turvar_val + tahun_val (perlu split lagi)
-    remainder = key[idx + len(var_id_str):]
-
-    # Cari turvar_val dan tahun_val dari remainder
-    # Strategi: coba semua turvar_val yang ada, ambil yang cocok sebagai prefix
-    turvar_label = None
-    tahun_label  = None
-
-    for tv_val, tv_label in turvar_map.items():
-        if remainder.startswith(tv_val):
-            tahun_remainder = remainder[len(tv_val):]
-            # Cek apakah sisa setelah turvar adalah tahun yang valid
-            for th_val, th_label in tahun_map.items():
-                if tahun_remainder.startswith(th_val):
-                    turvar_label = tv_label
-                    tahun_label  = th_label
-                    break
-            if turvar_label:
+    # Step 1: vervar_val — prefix sebelum var_id
+    vervar_label = None
+    for val, label in vervar_map.items():
+        if remaining.startswith(val):
+            after_vervar = remaining[len(val):]
+            if after_vervar.startswith(var_id_str):
+                vervar_label = label
+                remaining = after_vervar[len(var_id_str):]
                 break
 
-    if not (vervar_val in vervar_map and turvar_label and tahun_label):
-        # Fallback: log untuk investigasi manual
-        logger.debug(
-            f"Decode gagal untuk key='{key}' var_id={var_id} | "
-            f"vervar_val='{vervar_val}' | turvar coba dari remainder='{remainder}'"
-        )
+    if vervar_label is None:
+        logger.debug(f"Gagal decode vervar dari key='{key}'")
         return None
 
-    return vervar_map[vervar_val], turvar_label, tahun_label
+    # Step 2: turvar_val — jika tidak ada, val=0
+    turvar_label = None
+    for val, label in turvar_map.items():
+        if remaining.startswith(val):
+            turvar_label = label
+            remaining = remaining[len(val):]
+            break
+    if turvar_label is None:
+        turvar_label = ""   # turvar tidak wajib ada
+        # remaining tidak dipotong — lanjut cari tahun
 
+    # Step 3: tahun_val
+    tahun_label = None
+    for val, label in tahun_map.items():
+        if remaining.startswith(val):
+            tahun_label = label
+            remaining = remaining[len(val):]
+            break
+
+    if tahun_label is None:
+        logger.debug(f"Gagal decode tahun dari key='{key}' sisa='{remaining}'")
+        return None
+
+    # Step 4: turtahun_val — jika tidak ada, val=0
+    turtahun_label = None
+    for val, label in turtahun_map.items():
+        if remaining.startswith(val):
+            turtahun_label = label
+            remaining = remaining[len(val):]
+            break
+    if turtahun_label is None:
+        turtahun_label = ""   # turtahun tidak wajib ada
+
+    return vervar_label, turvar_label, tahun_label, turtahun_label
 
 # ---------------------------------------------------------------------------
 # Konversi ke kalimat deskriptif
@@ -164,45 +169,60 @@ def decode_datacontent_key(
 def build_sentence(
     title: str,
     definition: str,
+    labelvervar: str,
     vervar_label: str,
-    turvar_label: str,
+    turvar_label: str,       # kosong jika turvar_val == 0
     tahun_label: str,
-    value: float | str,
+    turtahun_label: str,     # kosong jika turtahun_val == 0
+    value: str,
     unit: str,
 ) -> str:
     """
-    Bangun satu kalimat deskriptif dari komponen-komponen yang sudah di-decode.
+    Bangun kalimat deskriptif dengan template:
+      {title}: {definition}
+      {labelvervar} {vervar_label} yang {turvar_label} pada {turtahun_label} {tahun_label}
+      sebesar {value} {unit}
 
-    Template:
-      [Judul indikator]: [definisi singkat jika ada].
-      [vervar_label] di Kota Bandung pada tahun [tahun_label],
-      [turvar_label] sebesar [value] [unit].
-
-    Contoh output:
-      Persentase Anggota Rumah Tangga Berusia 5 Tahun ke Atas menurut
-      Jenis Kelamin KRT dan Penggunaan Teknologi Informasi:
-      Menggunakan Telepon Seluler (HP)/Nirkabel atau Komputer.
-      Laki-laki di Kota Bandung pada tahun 2021,
-      Menggunakan Telepon Seluler sebesar 82.21 Persen.
+    Komponen opsional:
+      - "yang {turvar_label}" hanya muncul jika turvar_label tidak kosong
+      - "{turtahun_label}" hanya muncul jika turtahun_label tidak kosong
+      - "{unit}" hanya muncul jika unit != "Tidak Ada Satuan"
     """
-    parts = []
+    # Validasi value — skip jika tidak bermakna
+    cleaned_value = apply_symbol_legend(value)
+    if cleaned_value in ("data tidak tersedia", "tidak dapat ditampilkan"):
+        return ""
 
-    # Baris 1: judul + definisi
+    # Baris 1: header
     header = title.strip()
     if definition and definition.strip() and definition.strip() != header:
         header += f": {definition.strip()}"
-    parts.append(header)
 
     # Baris 2: data point
-    value_str = str(value).replace(".", ",")   # format angka Indonesia
+    turvar_part   = f" yang {turvar_label}" if turvar_label else ""
+    turtahun_part = f" {turtahun_label}" if turtahun_label else ""
+    unit_part     = f" {unit}" if unit and unit != "Tidak Ada Satuan" else ""
+
     data_line = (
-        f"{vervar_label} di Kota Bandung pada tahun {tahun_label}, "
-        f"{turvar_label} sebesar {value_str} {unit}."
+        f"{labelvervar} {vervar_label}{turvar_part}"
+        f" pada{turtahun_part} {tahun_label}"
+        f" sebesar {cleaned_value}{unit_part}."
     )
-    parts.append(data_line)
 
-    return normalize_whitespace(" ".join(parts))
+    return normalize_whitespace(f"{header} {data_line}")
 
+def resolve_region(title: str) -> str:
+    """
+    Cari nama kecamatan atau kelurahan dalam title secara case-insensitive.
+    Return nama wilayah jika ditemukan, default 'Kota Bandung' jika tidak.
+    Prioritas: kecamatan lebih panjang dicek dulu untuk hindari partial match.
+    """
+    title_lower = title.lower()
+    # Urutkan dari nama terpanjang ke terpendek untuk hindari partial match
+    for key in sorted(REGION_MAP.keys(), key=len, reverse=True):
+        if key in title_lower:
+            return REGION_MAP[key]
+    return "Kota Bandung"
 
 # ---------------------------------------------------------------------------
 # Bangun unified document dari satu raw_data + var_info
@@ -236,27 +256,35 @@ def process_one_variable(raw_doc: dict, var_lookup: dict) -> list[dict]:
     if not datacontent:
         logger.debug(f"datacontent kosong untuk var_id={var_id}")
         return []
+    
+    vervar_map, turvar_map, tahun_map, turtahun_map = build_lookup_maps(payload)
+    labelvervar = data_section.get("labelvervar", "")
 
-    vervar_map, turvar_map, tahun_map = build_lookup_maps(payload)
+    # Tambahkan sementara untuk debug
+    logger.debug(f"var_id={var_id} | vervar={vervar_map} | turvar={turvar_map} | tahun={tahun_map} | turtahun={turtahun_map}")
 
     unified_docs = []
 
     for key, value in datacontent.items():
-        decoded = decode_datacontent_key(key, var_id, vervar_map, turvar_map, tahun_map)
+        decoded = decode_datacontent_key(key, var_id, vervar_map, turvar_map, tahun_map, turtahun_map)
         if not decoded:
             continue
 
-        vervar_label, turvar_label, tahun_label = decoded
+        vervar_label, turvar_label, tahun_label, turtahun_label = decoded
 
         content = build_sentence(
             title        = title,
             definition   = definition,
+            labelvervar = labelvervar,
             vervar_label = vervar_label,
             turvar_label = turvar_label,
             tahun_label  = tahun_label,
+            turtahun_label = turtahun_label,
             value        = value,
             unit         = unit,
         )
+        if not content:
+            continue
 
         # Validasi sebelum lanjut
         candidate = {"content": content, "id": generate_id(content)}
@@ -272,7 +300,7 @@ def process_one_variable(raw_doc: dict, var_lookup: dict) -> list[dict]:
                 "date"       : last_update[:10] if last_update else None,
                 "year"       : int(tahun_label) if tahun_label.isdigit() else None,
                 "category"   : subcsa or sub_name,
-                "region"     : "Kota Bandung",
+                "region"     : resolve_region(title),
                 "source_url" : None,
                 "extra"      : {
                     "var_id"       : var_id,
@@ -346,7 +374,12 @@ def run():
     logger.info("Memuat var_info dari raw_docs...")
     var_lookup = {}
 
-    for raw_var in raw_coll.find({"source_type": "dynamic_var"}):
+    projection = {
+        "payload.var_id": 1, "payload.title": 1, "payload.def": 1,
+        "payload.unit": 1, "payload.subcsa_name": 1, "payload.sub_name": 1,
+        "_id": 0
+    }
+    for raw_var in raw_coll.find({"source_type": "dynamic_var"}, projection):
         payload = raw_var.get("payload", {})
         vid     = payload.get("var_id")
         if vid:
@@ -369,21 +402,25 @@ def run():
             logger.warning(f"var_id={var_id} tidak ada di var_lookup, skip.")
             total_skip += 1
             continue
-
-        unified_docs = process_one_variable(raw_doc, var_lookup)
+        
+        try:
+            unified_docs = process_one_variable(raw_doc, var_lookup)
+        except Exception as e:
+            logger.error(f"Gagal memproses var_id={var_id}. Error: {e}")
+            total_skip += 1
+            continue
 
         if not unified_docs:
             total_skip += 1
             continue
 
-        batch.extend(unified_docs)
-
-        # Flush batch ke MongoDB setiap BATCH_SIZE dokumen
-        if len(batch) >= BATCH_SIZE:
-            saved = save_documents(batch, doc_coll)
-            total_saved += saved
-            logger.info(f"  [{i}/{total_raw}] Batch flushed: {saved} dokumen disimpan")
-            batch = []
+        for doc in unified_docs:
+            batch.append(doc)
+            if len(batch) >= BATCH_SIZE:
+                saved = save_documents(batch, doc_coll)
+                total_saved += saved
+                logger.info(f"  [{i}/{total_raw}] Batch flushed: {saved} dokumen disimpan")
+                batch = []
 
     # Flush sisa batch
     if batch:
