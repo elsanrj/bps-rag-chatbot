@@ -67,26 +67,25 @@ def build_lookup_maps(raw_data: dict) -> tuple[dict, dict, dict]:
     Key di datacontent adalah gabungan string dari val-val tersebut,
     sehingga lookup map ini kunci utama proses decode.
     """
-    data_section = raw_data.get("data", {})
 
     vervar_map = {
         str(item["val"]): item["label"]
-        for item in data_section.get("vervar", [])
+        for item in raw_data.get("vervar", [])
         if item.get("val") is not None
     }
     turvar_map = {
         str(item["val"]): item["label"]
-        for item in data_section.get("turvar", [])
+        for item in raw_data.get("turvar", [])
         if item.get("val") is not None
     }
     tahun_map = {
         str(item["val"]): item["label"]
-        for item in data_section.get("tahun", [])
+        for item in raw_data.get("tahun", [])
         if item.get("val") is not None
     }
     turtahun_map = {
         str(item["val"]): item["label"]
-        for item in data_section.get("turtahun", [])
+        for item in raw_data.get("turtahun", [])
         if item.get("val") is not None
     }
     
@@ -124,7 +123,7 @@ def decode_datacontent_key(
                 break
 
     if vervar_label is None:
-        logger.debug(f"Gagal decode vervar dari key='{key}'")
+        logger.info(f"Gagal decode vervar dari key='{key}'")
         return None
 
     # Step 2: turvar_val — jika tidak ada, val=0
@@ -147,7 +146,7 @@ def decode_datacontent_key(
             break
 
     if tahun_label is None:
-        logger.debug(f"Gagal decode tahun dari key='{key}' sisa='{remaining}'")
+        logger.info(f"Gagal decode tahun dari key='{key}' sisa='{remaining}'")
         return None
 
     # Step 4: turtahun_val — jika tidak ada, val=0
@@ -249,19 +248,16 @@ def process_one_variable(raw_doc: dict, var_lookup: dict) -> list[dict]:
     subcsa     = var_info.get("subcsa_name", "")
     sub_name   = var_info.get("sub_name", "")
 
-    data_section  = payload.get("data", {})
-    datacontent   = data_section.get("datacontent", {})
+    data_section  = payload
+    datacontent   = payload.get("datacontent", {})
     last_update   = payload.get("last_update", "")
 
     if not datacontent:
-        logger.debug(f"datacontent kosong untuk var_id={var_id}")
+        logger.info(f"datacontent kosong untuk var_id={var_id}")
         return []
     
     vervar_map, turvar_map, tahun_map, turtahun_map = build_lookup_maps(payload)
     labelvervar = data_section.get("labelvervar", "")
-
-    # Tambahkan sementara untuk debug
-    logger.debug(f"var_id={var_id} | vervar={vervar_map} | turvar={turvar_map} | tahun={tahun_map} | turtahun={turtahun_map}")
 
     unified_docs = []
 
