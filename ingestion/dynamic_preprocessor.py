@@ -9,7 +9,7 @@ Tanggung jawab modul ini:
   - Simpan hasil ke MongoDB collection `documents` (unified schema)
 
 Prasyarat:
-  - json_ingestor.py sudah dijalankan (raw_docs terisi)
+  - dynamic_ingestor.py sudah dijalankan (raw_docs terisi)
   - cleaner.py tersedia di direktori yang sama
 
 Jalankan:
@@ -195,17 +195,17 @@ def build_sentence(
     # Baris 1: header
     header = title.strip()
     if definition and definition.strip() and definition.strip() != header:
-        header += f": {definition.strip()}"
+        header += f": {definition.strip()}."
 
     # Baris 2: data point
-    turvar_part   = f" yang {turvar_label}" if turvar_label else ""
+    turvar_part   = f" yang {turvar_label}" if turvar_label and turvar_label != "Tidak ada" else ""
     turtahun_part = f" {turtahun_label}" if turtahun_label else ""
     unit_part     = f" {unit}" if unit and unit != "Tidak Ada Satuan" else ""
 
     data_line = (
         f"{labelvervar} {vervar_label}{turvar_part}"
         f" pada{turtahun_part} {tahun_label}"
-        f" sebesar {cleaned_value}{unit_part}."
+        f" sebesar {cleaned_value}{unit_part}"
     )
 
     return normalize_whitespace(f"{header} {data_line}")

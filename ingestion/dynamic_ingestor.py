@@ -1,5 +1,5 @@
 """
-json_ingestor.py
+dynamic_ingestor.py
 Fase 1A - Hari 6: Ingestion Data Dinamis BPS Kota Bandung
 
 Tanggung jawab modul ini:
@@ -15,7 +15,7 @@ Flow:
   fetch_variable_data(var_id, th_id) → raw datacontent per kombinasi
 
 Jalankan:
-  python -m ingestion.json_ingestor
+  python -m ingestion.dynamic_ingestor
 
 Env variables yang diperlukan (.env):
   BPS_API_KEY    : API key WebAPI BPS
@@ -136,14 +136,14 @@ def fetch_all_variables() -> list[dict]:
         for var in var_list:
             all_vars.append({
                 "var_id"      : var.get("var_id"),
-                "title"       : var.get("title", ""),
+                "title"       : var.get("title"),
                 "sub_id"      : var.get("sub_id"),
-                "sub_name"    : var.get("sub_name", ""),
+                "sub_name"    : var.get("sub_name"),
                 "subcsa_id"   : var.get("subcsa_id"),
-                "subcsa_name" : var.get("subcsa_name", ""),
-                "def"         : var.get("def", ""),
-                "unit"        : var.get("unit", ""),
-                "notes"       : var.get("notes", ""),
+                "subcsa_name" : var.get("subcsa_name"),
+                "def"         : var.get("def"),
+                "unit"        : var.get("unit"),
+                "notes"       : var.get("notes"),
             })
 
         total_pages = pagination.get("pages", 1)
@@ -189,7 +189,7 @@ def fetch_all_years() -> list[dict]:
         for item in year_list:
             all_years.append({
                 "th_id" : item.get("th_id"),
-                "th"    : item.get("th", ""),
+                "th"    : item.get("th"),
             })
 
         total_pages = pagination.get("pages", 1)
@@ -330,7 +330,7 @@ def run(var_limit: int = None, year_limit: int = None):
     collection = get_mongo_collection()
     logger.info(f"Terhubung ke MongoDB: {MONGODB_DB}.{COLLECTION}")
 
-    # --- Step 1: Fetch variabel ---
+    # --- Step 1: Fetch variabel --- (choose 1 method)
     # all_vars = fetch_all_variables()
     all_vars = [doc["payload"] for doc in collection.find({"source_type": "dynamic_var"})]
 
