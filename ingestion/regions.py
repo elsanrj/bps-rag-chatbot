@@ -1,6 +1,6 @@
 # Map wilayah Kota Bandung untuk metadata region
 # Format: "nama_lowercase" -> "nama_display"
-REGION_MAP = {
+DISTRICTS = {
     # ==========================================
     # KECAMATAN (30 Kecamatan)
     # ==========================================
@@ -34,7 +34,9 @@ REGION_MAP = {
     "sukasari": "Kecamatan Sukasari",
     "sumur bandung": "Kecamatan Sumur Bandung",
     "ujungberung": "Kecamatan Ujungberung",
+}
 
+VILLAGES = {
     # ==========================================
     # KELURAHAN (151 Kelurahan)
     # ==========================================

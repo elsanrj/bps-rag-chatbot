@@ -30,7 +30,7 @@ from pymongo import MongoClient, UpdateOne
 from pymongo.errors import BulkWriteError
 
 from ingestion.cleaner import normalize_whitespace, validate_doc, generate_id, apply_symbol_legend
-from ingestion.regions import REGION_MAP
+from ingestion.regions import DISTRICTS, VILLAGES
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -167,7 +167,6 @@ def decode_datacontent_key(
 
 def build_sentence(
     title: str,
-    definition: str,
     labelvervar: str,
     vervar_label: str,
     turvar_label: str,       # kosong jika turvar_val == 0
@@ -178,12 +177,12 @@ def build_sentence(
 ) -> str:
     """
     Bangun kalimat deskriptif dengan template:
-      {title}: {definition}
-      {labelvervar} {vervar_label} yang {turvar_label} pada {turtahun_label} {tahun_label}
+      {title}
+      {labelvervar} {vervar_label} kategori {turvar_label} pada {turtahun_label} {tahun_label}
       sebesar {value} {unit}
 
     Komponen opsional:
-      - "yang {turvar_label}" hanya muncul jika turvar_label tidak kosong
+      - "kategori {turvar_label}" hanya muncul jika turvar_label tidak kosong
       - "{turtahun_label}" hanya muncul jika turtahun_label tidak kosong
       - "{unit}" hanya muncul jika unit != "Tidak Ada Satuan"
     """
@@ -194,11 +193,9 @@ def build_sentence(
 
     # Baris 1: header
     header = title.strip()
-    if definition and definition.strip() and definition.strip() != header:
-        header += f": {definition.strip()}."
 
     # Baris 2: data point
-    turvar_part   = f" yang {turvar_label}" if turvar_label and turvar_label != "Tidak ada" else ""
+    turvar_part   = f" kategori {turvar_label}" if turvar_label and turvar_label != "Tidak ada" else ""
     turtahun_part = f" {turtahun_label}" if turtahun_label else ""
     unit_part     = f" {unit}" if unit and unit != "Tidak Ada Satuan" else ""
 
@@ -208,20 +205,47 @@ def build_sentence(
         f" sebesar {cleaned_value}{unit_part}"
     )
 
-    return normalize_whitespace(f"{header} {data_line}")
+    return normalize_whitespace(f"{header}. {data_line}")
 
-def resolve_region(title: str) -> str:
+def resolve_region(title: str, vervar_label: str) -> str:
     """
     Cari nama kecamatan atau kelurahan dalam title secara case-insensitive.
     Return nama wilayah jika ditemukan, default 'Kota Bandung' jika tidak.
-    Prioritas: kecamatan lebih panjang dicek dulu untuk hindari partial match.
+    Prioritas: nama terpanjang dicek dulu untuk hindari partial match.
     """
-    title_lower = title.lower()
-    # Urutkan dari nama terpanjang ke terpendek untuk hindari partial match
-    for key in sorted(REGION_MAP.keys(), key=len, reverse=True):
-        if key in title_lower:
-            return REGION_MAP[key]
+    title_low = title.lower()
+    vervar_low = vervar_label.lower() if vervar_label else ""
+    
+    # Strategi: Urutkan kunci berdasarkan panjang karakter (descending) 
+    # agar nama panjang tidak terpotong (misal: "Bandung Kidul" vs "Bandung")
+    sorted_villages = sorted(VILLAGES.items(), key=len, reverse=True)
+    sorted_districts = sorted(DISTRICTS.items(), key=len, reverse=True)
+
+    # 1. Cek di vervar_label dengan bantuan hint 'vervar label'
+    # Jika vervar label menyebutkan kecamatan, cari di map kecamatan dulu            
+    if "kecamatan" in vervar_low:
+        for name, display in sorted_districts:
+            if name in vervar_low: return display
+            
+        for name, display in sorted_villages:
+            if name in vervar_low: return display
+            
+    else:
+        for name, display in sorted_villages:
+            if name in vervar_low: return display
+        
+        for name, display in sorted_districts:
+            if name in vervar_low: return display
+
+    # LANGKAH 2: Cek di Judul (Title)
+    for name, display in sorted_villages:
+        if name in title_low: return display
+
+    for name, display in sorted_districts:
+        if name in title_low: return display
+        
     return "Kota Bandung"
+
 
 # ---------------------------------------------------------------------------
 # Bangun unified document dari satu raw_data + var_info
@@ -243,7 +267,6 @@ def process_one_variable(raw_doc: dict, var_lookup: dict) -> list[dict]:
     var_info = var_lookup.get(var_id, {})
 
     title      = var_info.get("title", f"Variabel {var_id}")
-    definition = var_info.get("def", "")
     unit       = var_info.get("unit", "")
     subcsa     = var_info.get("subcsa_name", "")
     sub_name   = var_info.get("sub_name", "")
@@ -270,7 +293,6 @@ def process_one_variable(raw_doc: dict, var_lookup: dict) -> list[dict]:
 
         content = build_sentence(
             title        = title,
-            definition   = definition,
             labelvervar = labelvervar,
             vervar_label = vervar_label,
             turvar_label = turvar_label,
@@ -296,7 +318,7 @@ def process_one_variable(raw_doc: dict, var_lookup: dict) -> list[dict]:
                 "date"       : last_update[:10] if last_update else None,
                 "year"       : int(tahun_label) if tahun_label.isdigit() else None,
                 "category"   : subcsa or sub_name,
-                "region"     : resolve_region(title),
+                "region"     : resolve_region(title, vervar_label),
                 "source_url" : None,
                 "extra"      : {
                     "var_id"       : var_id,

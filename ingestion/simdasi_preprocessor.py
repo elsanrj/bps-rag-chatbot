@@ -41,7 +41,7 @@ from ingestion.cleaner import (
     validate_doc,
     generate_id,
 )
-from ingestion.regions import REGION_MAP
+from ingestion.regions import VILLAGES, DISTRICTS
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -67,16 +67,44 @@ BATCH_SIZE   = 100
 # Region resolver (sama dengan dynamic_preprocessor)
 # ---------------------------------------------------------------------------
 
-def resolve_region(title: str) -> str:
+def resolve_region(title: str, row_label: str, lingkup: str) -> str:
     """
     Cari nama kecamatan atau kelurahan dalam title secara case-insensitive.
     Return nama wilayah jika ditemukan, default 'Kota Bandung' jika tidak.
     Prioritas: nama terpanjang dicek dulu untuk hindari partial match.
     """
-    title_lower = title.lower()
-    for key in sorted(REGION_MAP.keys(), key=len, reverse=True):
-        if key in title_lower:
-            return REGION_MAP[key]
+    title_low = title.lower()
+    row_low = row_label.lower() if row_label else ""
+    lingkup_low = lingkup.lower() if lingkup else ""
+    
+    # Strategi: Urutkan kunci berdasarkan panjang karakter (descending) 
+    # agar nama panjang tidak terpotong (misal: "Bandung Kidul" vs "Bandung")
+    sorted_villages = sorted(VILLAGES.items(), key=len, reverse=True)
+    sorted_districts = sorted(DISTRICTS.items(), key=len, reverse=True)
+
+    # 1. Cek di row_label dengan bantuan hint 'lingkup'
+    # Jika lingkup menyebutkan kecamatan, cari di map kecamatan dulu            
+    if "kecamatan" in lingkup_low:
+        for name, display in sorted_districts:
+            if name in row_low: return display
+            
+        for name, display in sorted_villages:
+            if name in row_low: return display
+            
+    else:
+        for name, display in sorted_villages:
+            if name in row_low: return display
+        
+        for name, display in sorted_districts:
+            if name in row_low: return display
+
+    # LANGKAH 2: Cek di Judul (Title)
+    for name, display in sorted_villages:
+        if name in title_low: return display
+
+    for name, display in sorted_districts:
+        if name in title_low: return display
+        
     return "Kota Bandung"
 
 
@@ -121,12 +149,10 @@ def parse_kolom(kolom: dict) -> dict:
 
 def build_row_sentence(
     judul: str,
-    catatan: str,
     lingkup: str,
     row_label: str,
     kolom_map: dict,
     variables: dict,
-    tahun_data: int,
     satuan: str | None,
     keterangan_data: dict,
 ) -> str:
@@ -134,7 +160,7 @@ def build_row_sentence(
     Konversi satu baris data tabel SIMDASI menjadi kalimat deskriptif.
 
     Template:
-      {judul}: {catatan}.
+      {judul}.
       {lingkup} {row_label}: {kolom1} sebesar {val1}{satuan},
       {kolom2} sebesar {val2}{satuan}.
 
@@ -178,17 +204,16 @@ def build_row_sentence(
 
     # Bersihkan judul dari HTML jika ada
     clean_judul  = clean_html(judul)
-    clean_catatan = clean_html(catatan)
     clean_lingkup = clean_html(lingkup) if lingkup else ""
     clean_label  = clean_html(row_label)
 
     # Header: judul + tahun
-    header = f"{clean_judul}: {clean_catatan}."
+    header = f"{clean_judul}"
 
     # Prefix baris: gunakan lingkup jika ada
     prefix = f"{clean_lingkup} {clean_label}" if clean_lingkup else clean_label
 
-    sentence = f"{header} {prefix}: {', '.join(parts)}"
+    sentence = f"{header}. {prefix}: {', '.join(parts)}"
     return normalize_whitespace(sentence)
 
 
@@ -222,7 +247,6 @@ def process_one_table(raw_doc: dict) -> list[dict]:
 
     # Field-field utama dari payload
     judul           = clean_html(payload.get("judul_tabel"))
-    catatan         = clean_html(payload.get("catatan"))
     lingkup         = clean_html(payload.get("lingkup_id"))
     tahun_data      = payload.get("tahun_data", tahun)
     bab             = payload.get("bab")
@@ -267,10 +291,8 @@ def process_one_table(raw_doc: dict) -> list[dict]:
             judul           = judul,
             lingkup         = lingkup,
             row_label       = row_label,
-            catatan         = catatan,
             kolom_map       = kolom_map,
             variables       = variables,
-            tahun_data      = tahun_data,
             satuan          = satuan,
             keterangan_data = keterangan_data,
         )
@@ -291,7 +313,7 @@ def process_one_table(raw_doc: dict) -> list[dict]:
                 "date"       : None,
                 "year"       : int(tahun_data) if str(tahun_data).isdigit() else None,
                 "category"   : subject or bab,
-                "region"     : resolve_region(judul),
+                "region"     : resolve_region(judul, row_label, lingkup),
                 "source_url" : source_url,
                 "extra"      : {
                     "id_tabel"  : id_tabel,
