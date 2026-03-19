@@ -338,8 +338,8 @@ def run(var_limit: int = None, year_limit: int = None):
         logger.error("Tidak ada variabel yang berhasil di-fetch. Hentikan.")
         return
 
-    # # --- Step 2: Simpan variabel ---
-    # save_raw_variables(all_vars, collection)
+    # --- Step 2: Simpan variabel --- (done)
+    save_raw_variables(all_vars, collection)
 
     # --- Step 3: Fetch data per var_id ---
     if var_limit:
