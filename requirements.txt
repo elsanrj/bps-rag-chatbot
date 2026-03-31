@@ -5,3 +5,5 @@ pymongo[srv]==3.12
 dotenv 0.9.
 requests 2.32.5
 pytest 9.0.2
+bs4 0.0.2
+cloudscraper 1.2.71
