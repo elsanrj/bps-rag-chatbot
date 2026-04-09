@@ -556,7 +556,7 @@ def run():
     total_skip   = 0
     count_type_a = 0
     count_type_b = 0
-    count_type_c = 0se
+    count_type_c = 0
     batch        = []
 
     logger.info(f"Total raw BRS yang akan diproses: {total_raw}")
