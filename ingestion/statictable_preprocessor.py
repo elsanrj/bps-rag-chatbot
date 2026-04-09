@@ -48,7 +48,7 @@ from ingestion.cleaner import (
     validate_doc,
     generate_id,
 )
-from ingestion.regions import REGION_MAP
+from ingestion.regions import DISTRICTS, VILLAGES
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -81,18 +81,33 @@ ROW_EMPTY  = "empty"    # baris kosong — dibuang
 # Region resolver (konsisten dengan dynamic_preprocessor)
 # ---------------------------------------------------------------------------
 
+_REGION_KEYWORDS_JABAR = [
+    "jawa barat", "jabar", "provinsi jawa barat",
+]
+
 def resolve_region(title: str) -> str:
     """
     Cari nama kecamatan atau kelurahan dalam title secara case-insensitive.
     Return nama wilayah jika ditemukan, default 'Kota Bandung' jika tidak.
-    Nama terpanjang dicek dulu untuk hindari partial match.
+    Prioritas: kecamatan lebih panjang dicek dulu untuk hindari partial match.
     """
-    title_lower = title.lower()
-    for key in sorted(REGION_MAP.keys(), key=len, reverse=True):
-        if key in title_lower:
-            return REGION_MAP[key]
-    return "Kota Bandung"
+    title_low = title.lower()
+    # Strategi: Urutkan kunci berdasarkan panjang karakter (descending) 
+    # agar nama panjang tidak terpotong (misal: "Bandung Kidul" vs "Bandung")
+    sorted_villages = sorted(VILLAGES.items(), key=len, reverse=True)
+    sorted_districts = sorted(DISTRICTS.items(), key=len, reverse=True)
+    
+    for name, display in sorted_villages:
+        if name in title_low: return display
 
+    for name, display in sorted_districts:
+        if name in title_low: return display
+        
+    for keyword in _REGION_KEYWORDS_JABAR:
+        if keyword in title_low:
+            return "Provinsi Jawa Barat"
+        
+    return "Kota Bandung"
 
 # ---------------------------------------------------------------------------
 # HTML table parser
